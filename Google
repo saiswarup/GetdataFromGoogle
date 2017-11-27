@@ -1,0 +1,157 @@
+# -*- coding: utf-8 -*-
+#Insatll pip install --isolated flask
+import sys
+from lxml import html
+from lxml import cssselect
+from lxml import etree
+import requests
+import urllib
+import datetime
+
+proxies = {
+    'http' : 'http://095.0.0.1:8763'
+}
+
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'
+}
+
+parser = etree.HTMLParser(encoding="utf8", recover=True)
+
+end_result = []
+
+import smtplib
+from email.mime.text import MIMEText as text
+
+def send_mail(subject, message):
+    sender = "xxxxxxxxx"
+    receiver = "xxxxxxx"
+    cc = ["xxxxxxxxxxx"]
+    bcc = []
+    receivers = receiver
+    m = text(message)
+    m['Subject'] = subject
+    m['From'] = sender
+    m['To'] = receiver
+    m['Cc'] = ','.join(cc)
+    m['Bcc'] = ','.join(bcc)
+
+   # message = message
+
+    try:
+       smtpObj = smtplib.SMTP('localhost')
+       #smtpObj.connect("smtp.gmail.com", 587)
+       smtpObj.sendmail(sender, [receivers] + cc + bcc, str(m))
+       print "Successfully sent email"
+    except smtplib.SMTPException, e:
+       print "Error: unable to send email" , str(e)
+
+
+def get_doc(url):
+    doc = etree.parse(urllib.urlopen(url), parser)
+    return doc
+
+def check_datetime(text_list, months):
+    updated = []
+    for txt in text_list:
+        for mon in months:
+            if mon in txt:
+                updated.append(txt)
+    return updated
+
+def second_level_search(base_url, urls, months):
+    base_url = base_url.replace('http://', '').replace('https://','').split('/')[0]
+    base_url = 'http://' + base_url
+    i = 0
+    for url in urls:
+        if i>10:
+            break;
+        if not url:
+            continue
+        elif "past" in url:
+            continue
+        elif url:
+            if not url.startswith("http"):
+                url = base_url + url
+        url = url.replace('https://','http://')
+        if not url.startswith(base_url):
+            continue
+        else:
+            i= i+1
+        try:
+            doc = get_doc(url)
+            events = doc.xpath("//body//text()[contains(translate(.,'ABCDEFGHIJKLOMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'events')]")
+            exhibitions = doc.xpath("//body//text()[contains(translate(.,'ABCDEFGHIJKLOMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'exhibition')]")
+            auctions = doc.xpath("//body//text()[contains(translate(.,'ABCDEFGHIJKLOMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'auction')]")
+            second_level_search_results = doc.xpath('//body//text()[contains(string(), "2017")]')
+            second_level_search_results = check_datetime(second_level_search_results, months)
+            if len(second_level_search_results) > 3 and (events or exhibitions or auctions):
+                end_result.append(base_url)
+                break
+        except Exception, e:
+            #print str(e)
+            pass
+
+def lookup_search_links(urls, months, artist):
+    urls = ['', '']
+    i=0
+    for search_link in urls:
+        if 'news' in search_link:
+            continue
+        try:
+            i = i+1
+            doc = get_doc(search_link)
+
+            events = doc.xpath("//body//text()[contains(translate(.,'ABCDEFGHIJKLOMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'events')]")
+            exhibitions = doc.xpath("//body//text()[contains(translate(.,'ABCDEFGHIJKLOMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'exhibition')]")
+            auctions = doc.xpath("//body//text()[contains(translate(.,'ABCDEFGHIJKLOMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'auction')]")
+
+            first_level_search = doc.xpath("//body//text()[contains(string(), '2017')]")
+            first_level_search = check_datetime(first_level_search, months)
+            if len(first_level_search) > 3 and (events or exhibitions or auctions):
+                end_result.append(search_link)
+            else:
+                deep_search_urls = list(set(doc.xpath("//body//a/@href")))
+                second_level_search(search_link, deep_search_urls, months)
+        except Exception, e:
+            #print "Exception", str(e)
+            pass
+    if end_result: 
+        send_mail("Upcoming data Search Results for web - %s" %artist, "Please find the results below:\n%s"%('\n'.join(end_result)))
+    else:
+        send_mail("Upcoming data Search Results for web - %s" %artist, "No Upcoming Events / data found in Google Search Results!")
+    print "Upcoming data Search Results for web- %s" %artist, "Please find the resultss below:\n%s"%('\n'.join(end_result))
+
+
+def search_results(search_keywords, artist):
+
+    months = []
+    current_month = datetime.datetime.now().month
+    for i in range(current_month, 13):
+        date = datetime.datetime(2017, i, 1)
+        months.append(date.strftime("%b"))
+        months.append(date.strftime("%B"))
+
+    urls = []
+    for search_keyword in search_keywords:
+        base_url = "https://www.google.it/search?&source=hp&q=%s&oq=%s&" %(search_keyword, search_keyword)
+        for page_num in range(0, 2):
+            url = base_url + "start=%s" %(page_num*10)
+            page = requests.get(url,proxies=proxies,headers=headers)
+            tree = html.fromstring(page.content)
+            results = tree.xpath('//div[@class="rc"]')
+            for result in results:
+                urls.append(result.xpath('.//a/@href')[0])
+    urls = list(set(urls))
+    lookup_search_links(urls, months, artist)
+
+if __name__ == "__main__":
+
+    if sys.argv.__len__() < 2:
+        print "Not enough arguments. You need to pass 2 arguments to run this script correctly."
+        sys.exit()
+    else:
+        artist = sys.argv[1]
+        search = [artist + " auction", artist + " exhibition"]
+        search_results(search, artist)
+
